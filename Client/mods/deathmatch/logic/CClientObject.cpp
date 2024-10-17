@@ -388,11 +388,58 @@ void CClientObject::GetScale(CVector& vecScale) const
     }
 }
 
+#include "StdInc.h"
+#include "CClientObject.h"
+
+class CClientGame;  // Forward declaration
+
+CClientObject::CClientObject(CClientManager* pManager, ElementID ID, unsigned short usModel)
+    : ClassInit(this), CClientStreamElement(pManager->GetObjectStreamer(), ID), m_pManager(pManager)
+{
+    // Initialize member variables
+    m_pObjectManager = pManager->GetObjectManager();
+    m_usModel = usModel;
+    m_pObject = NULL;
+    m_bIsVisible = true;
+    m_bUsesCollision = true;
+    m_vecScale = CVector(1.0f, 1.0f, 1.0f);
+    m_pGame = pManager->GetGameInterface();
+
+    // Add this object to the manager's list
+    m_pObjectManager->AddToList(this);
+}
+
+CClientObject::~CClientObject()
+{
+    // Remove this object from the manager's list
+    Unlink();
+
+    // Destroy the game object
+    if (m_pObject)
+    {
+        m_pObject->Destroy();
+        m_pObject = NULL;
+    }
+}
+
 void CClientObject::SetScale(const CVector& vecScale)
 {
     if (m_pObject)
     {
         m_pObject->SetScale(vecScale.fX, vecScale.fY, vecScale.fZ);
+        
+        // Update collision if it's enabled
+        if (m_bUsesCollision)
+        {
+            // Temporarily disable collision
+            m_pObject->SetUsesCollision(false);
+            
+            // Update collision shape based on new scale
+            UpdateCollisionShape(vecScale);
+            
+            // Re-enable collision
+            m_pObject->SetUsesCollision(true);
+        }
     }
     m_vecScale = vecScale;
 }
@@ -400,13 +447,116 @@ void CClientObject::SetScale(const CVector& vecScale)
 void CClientObject::SetCollisionEnabled(bool bCollisionEnabled)
 {
     if (m_pObject)
+    {
         m_pObject->SetUsesCollision(bCollisionEnabled);
-
+        
+        if (bCollisionEnabled)
+        {
+            // Update collision shape based on current scale
+            UpdateCollisionShape(m_vecScale);
+        }
+    }
+    
     // Remove all contacts
     for (const auto& ped : m_Contacts)
         RemoveContact(ped);
-
+    
     m_bUsesCollision = bCollisionEnabled;
+}
+
+void CClientObject::UpdateCollisionShape(const CVector& vecScale)
+{
+    if (!m_pObject)
+        return;
+
+    // Get the original collision model
+    CColModel* pOriginalColModel = m_pGame->GetModelInfo(m_usModel)->GetColModel();
+    if (!pOriginalColModel)
+        return;
+
+    // Create a new scaled collision model
+    CColModel* pScaledColModel = new CColModel(*pOriginalColModel);
+
+    // Scale the collision spheres
+    for (int i = 0; i < pScaledColModel->numSpheres; i++)
+    {
+        pScaledColModel->spheres[i].center *= vecScale;
+        pScaledColModel->spheres[i].radius *= (vecScale.fX + vecScale.fY + vecScale.fZ) / 3.0f;
+    }
+
+    // Scale the collision boxes
+    for (int i = 0; i < pScaledColModel->numBoxes; i++)
+    {
+        pScaledColModel->boxes[i].min *= vecScale;
+        pScaledColModel->boxes[i].max *= vecScale;
+    }
+
+    // Apply the new collision model to the object
+    m_pObject->SetColModel(pScaledColModel);
+
+    // Don't forget to clean up
+    delete pScaledColModel;
+}
+
+void CClientObject::Unlink()
+{
+    m_pObjectManager->RemoveFromList(this);
+}
+
+void CClientObject::GetPosition(CVector& vecPosition) const
+{
+    if (m_pObject)
+    {
+        m_pObject->GetPosition(vecPosition);
+    }
+    else
+    {
+        vecPosition = m_vecPosition;
+    }
+}
+
+void CClientObject::SetPosition(const CVector& vecPosition)
+{
+    if (m_pObject)
+    {
+        m_pObject->SetPosition(vecPosition);
+    }
+    m_vecPosition = vecPosition;
+    UpdateStreamPosition(vecPosition);
+}
+
+bool CClientObject::GetMatrix(CMatrix& matrix) const
+{
+    if (m_pObject)
+    {
+        m_pObject->GetMatrix(&matrix);
+        return true;
+    }
+    return false;
+}
+
+bool CClientObject::SetMatrix(const CMatrix& matrix)
+{
+    if (m_pObject)
+    {
+        m_pObject->SetMatrix(const_cast<CMatrix*>(&matrix));
+        return true;
+    }
+    return false;
+}
+
+void CClientObject::SetOrientation(const CVector& vecRotation)
+{
+    if (m_pObject)
+    {
+        m_pObject->SetOrientation(vecRotation.fX, vecRotation.fY, vecRotation.fZ);
+    }
+    m_vecRotation = vecRotation;
+}
+
+void CClientObject::RemoveContact(CClientPed* pPed)
+{
+    m_Contacts.remove(pPed);
 }
 
 float CClientObject::GetHealth()
